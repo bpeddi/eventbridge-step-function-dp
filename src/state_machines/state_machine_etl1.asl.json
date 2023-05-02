@@ -1,0 +1,82 @@
+{
+  "Comment": "redshift ETL process 1",
+  "StartAt": "Start the process",
+  "States": {
+    "Start the process": {
+      "Type": "Pass",
+      "Next": "Run ETL Job"
+    },
+    "Run ETL Job": {
+      "Type": "Task",
+      "Resource": "${Step1EtlFunctionArn}",
+      "ResultPath": "$.Result",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "Is ETL Job Success?"
+    },
+    "Is ETL Job Success?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Result.status",
+          "NumericEquals": 0,
+          "Next": "Send Success Message to Event Bridge"
+        }
+      ],
+      "Default": "Send Failed Message to Event Bridge"
+    },
+
+    "Send Success Message to Event Bridge":{
+      "Type":"Task",
+      "Resource":"arn:aws:states:::events:putEvents",
+      "Parameters":{
+         "Entries":[
+            {
+               "Detail":{
+                  "Message":{
+                     "message":"Info:NewETL:ETL Orchistration is Complete...:"
+                  },
+                  "state":"data-load-success"
+               },
+               "DetailType":"new-etl-info",
+               "EventBusName":"${EventBridgeEventBus}",
+               "Source":"newetl1.job"
+            }
+         ]
+      },
+      "Next":"Done"
+   },
+   "Send Failed Message to Event Bridge":{
+    "Type":"Task",
+    "Resource":"arn:aws:states:::events:putEvents",
+    "Parameters":{
+       "Entries":[
+          {
+             "Detail":{
+                "Message":{
+                   "message":"Error:NewETL:ETL Orchistration error...:"
+                },
+                "state":"data-load-failure"
+             },
+             "DetailType":"new-etl-error",
+             "EventBusName":"${EventBridgeEventBus}",
+             "Source":"newetl1.job"
+          }
+       ]
+    },
+    "Next":"Done"
+ },
+    "Done": {
+      "Type": "Succeed"
+    }
+  }
+}
+

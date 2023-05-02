@@ -1,0 +1,13 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "test-eb"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1lcc8ci3ip2pl"
+s3_prefix = "test-eb"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+disable_rollback = true
+parameter_overrides = "NewETLEventBusName=\"New-Etl-EventBus\" DataS3Bucket=\" balaaws-s3-ingest-321\""
+image_repositories = []

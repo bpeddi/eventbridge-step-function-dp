@@ -1,0 +1,203 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  Sample data lake
+
+Parameters:
+  NewETLEventBusName:
+    Type: String
+    Default: "New-Etl-EventBus"
+    Description: "Event Bus name for new ETL process "
+  DataS3Bucket:
+    Type: String
+    Default: "Sample-New-Etl-EventBus-s3-bucket"
+    Description: "Some S3 bucket for testing  "
+
+Resources:
+##########################################################################
+# Lambda  Functions
+
+  Step1ETLFunction:
+      Type: AWS::Serverless::Function
+      Properties:
+        CodeUri: ./src/lambda_functions/step1_etl
+        Description: >-
+          Lists files under an S3 prefix and returns an array containing
+          matching files (Both outgoing & Incoming)
+        Handler: app.lambda_handler
+        MemorySize: 256
+        Runtime: python3.9
+        # policy templates:
+        # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-policy-templates.html
+        Policies:
+          - S3ReadPolicy:
+              BucketName: !Ref DataS3Bucket
+        Timeout: 180
+        # VpcConfig:
+        #   SecurityGroupIds:
+        #     - !Ref SecGroup
+        #   SubnetIds: !Ref SubnetIds
+        Environment:
+          Variables:
+            LOG_LEVEL: INFO
+
+  Step2ETLFunction:
+      Type: AWS::Serverless::Function
+      Properties:
+        CodeUri: ./src/lambda_functions/step2_etl
+        Description: >-
+          Lists files under an S3 prefix and returns an array containing
+          matching files (Both outgoing & Incoming)
+        Handler: app.lambda_handler
+        Runtime: python3.9
+        MemorySize: 256
+        # policy templates:
+        # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-policy-templates.html
+        Policies:
+          - S3ReadPolicy:
+              BucketName: !Ref DataS3Bucket
+          - EventBridgePutEventsPolicy:
+              EventBusName: !Ref NewETLEventBusName
+
+        Timeout: 180
+        # VpcConfig:
+        #   SecurityGroupIds:
+        #     - !Ref SecGroup
+        #   SubnetIds: !Ref SubnetIds
+        Environment:
+          Variables:
+            LOG_LEVEL: INFO
+
+  EventBridgeEventBus:
+    Type: AWS::Events::EventBus
+    Properties: 
+      Name: !Ref NewETLEventBusName
+      # Tags: 
+      #   - TagEntry
+
+  ##########################################################################
+  # Step Functions
+  #
+  # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-step-functions-in-sam.html
+  # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-statemachine.html
+  ##########################################################################
+  Etl1ProcesStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: ./src/state_machines/state_machine_etl1.asl.json
+      # NOTE DefinitionSubstitutions only supports string substitutions
+      # so numeric values don't work
+      DefinitionSubstitutions:
+        Step1EtlFunctionArn: !GetAtt Step1ETLFunction.Arn
+        EventBridgeEventBus: !Ref EventBridgeEventBus
+
+
+      # policy templates:
+      # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-policy-templates.html
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref Step1ETLFunction
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref NewETLEventBusName
+
+  Etl2ProcesStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: ./src/state_machines/state_machine_etl2.asl.json
+      # NOTE DefinitionSubstitutions only supports string substitutions
+      # so numeric values don't work
+      DefinitionSubstitutions:
+        Step1EtlFunctionArn: !GetAtt Step2ETLFunction.Arn
+        EventBridgeEventBus: !Ref EventBridgeEventBus
+
+
+      # policy templates:
+      # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-policy-templates.html
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref Step2ETLFunction
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref NewETLEventBusName
+
+  EventBridgeInfoRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Step Functions Info Events Bus Rule
+      Name: New-Etl-Event-Rule-1
+      EventBusName: !Ref  EventBridgeEventBus
+      EventPattern:
+        source:
+          - newetl1.job
+        detail-type:
+          - new-etl-success
+          - new-etl-error
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt Etl2ProcesStateMachine.Arn
+          Id: SFFunctionV1
+          RoleArn: !GetAtt EventsRuleRole.Arn
+
+          
+  # LogGroupForEventsPolicy:
+  #   Type: AWS::Logs::ResourcePolicy
+  #   Properties:
+  #     PolicyName: EventBridgeToCWLogsPolicy
+  #     PolicyDocument: !Sub
+  #     - >
+  #       {
+  #         "Version": "2012-10-17",
+  #         "Statement": [
+  #           {
+  #             "Sid": "EventBridgetoCWLogsPolicy",
+  #             "Effect": "Allow",
+  #             "Principal": {
+  #               "Service": [
+  #                 "delivery.logs.amazonaws.com",
+  #                 "events.amazonaws.com"
+  #               ]
+  #             },
+  #             "Action": [
+  #               "logs:*",
+  #               "states.*"
+  #             ],
+  #             "Resource": [
+  #               "*"
+  #             ]
+  #           }
+  #         ]
+  #       }
+  #     - { ruleArn:  !GetAtt EventBridgeInfoRule.Arn}
+
+  # PermissionForRedshiftEventToInvokeLambda:
+  #   Type: AWS::Lambda::Permission
+  #   Properties:
+  #     FunctionName:
+  #       Ref: "StepFunctionCallBack"
+  #     Action: "lambda:InvokeFunction"
+  #     Principal: "events.amazonaws.com"
+  #     SourceArn:
+  #       Fn::GetAtt:
+  #         - "EventBridgeInfoRule"
+  #         - "Arn"
+
+  EventsRuleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: events.amazonaws.com
+      Policies:
+        - PolicyName: !Sub "StartStateMachineExecutionPolicy"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref Etl2ProcesStateMachine
+              - Effect: Allow
+                Action: "logs:*"
+                Resource: "*"
